@@ -235,7 +235,7 @@ struct thread_info
 ** The render function of the starting thread,
 ** for each thread, it render only the lines specified by arg
 */
-static void *thread_render(void *arg)
+static void *thread_start(void *arg)
 {
     struct thread_info *tinfo = arg;
     // printf("Thread %zu takes charge with line %zu to %zu\n",
@@ -251,6 +251,50 @@ static void *thread_render(void *arg)
             tinfo->renderer(image, scene, x, y);
 
     return NULL;
+}
+
+static void multithreading(struct rgb_image *image, struct scene *scene,
+                           render_mode_f renderer)
+{
+    // multithreading depending on the number of available processors
+    size_t num_threads = sysconf(_SC_NPROCESSORS_ONLN);
+    // size_t num_threads = 2;
+
+    // Allocate memory for the arguments of thread_start
+    struct thread_info *tinfo
+        = xcalloc(num_threads, sizeof(struct thread_info));
+
+    // Create the corresponding threads
+    int res;
+    for (size_t tnum = 0; tnum < num_threads; tnum++)
+    {
+        tinfo[tnum].thread_num = tnum + 1;
+
+        tinfo[tnum].y_s = tnum * image->height / num_threads;
+        tinfo[tnum].y_e = (tnum + 1) * image->height / num_threads;
+
+        tinfo[tnum].scene = scene;
+        tinfo[tnum].image = image;
+        tinfo[tnum].renderer = renderer;
+
+        res = pthread_create(&tinfo[tnum].thread_id, NULL, &thread_start,
+                             &tinfo[tnum]);
+        if (res != 0)
+            errx(42, "pthread_create error, exiting...");
+    }
+    // Wait all the threads joining back to the main
+    void *retval;
+    for (size_t tnum = 0; tnum < num_threads; tnum++)
+    {
+        res = pthread_join(tinfo[tnum].thread_id, &retval);
+        if (res != 0)
+            errx(42, "pthread_join error, exiting...");
+
+        // printf("Joined with thread %zu, return value was %s\n",
+        // tinfo[tnum].thread_num, (char *)retval);
+        free(retval);
+    }
+    free(tinfo);
 }
 
 int main(int argc, char *argv[])
@@ -289,50 +333,12 @@ int main(int argc, char *argv[])
             renderer = render_distances;
     }
 
-    // // render all pixels
+    // render all pixels in one thread
     // for (size_t y = 0; y < image->height; y++)
     //     for (size_t x = 0; x < image->width; x++)
     //         renderer(image, &scene, x, y);
-
-    // multithreading depending on the number of available processors
-    size_t num_threads = sysconf(_SC_NPROCESSORS_ONLN);
-    // size_t num_threads = 2;
-
-    // Allocate memory for the arguments of thread_start
-    struct thread_info *tinfo
-        = xcalloc(num_threads, sizeof(struct thread_info));
-
-    // Create the corresponding threads
-    int res;
-    for (size_t tnum = 0; tnum < num_threads; tnum++)
-    {
-        tinfo[tnum].thread_num = tnum + 1;
-
-        tinfo[tnum].y_s = tnum * image->height / num_threads;
-        tinfo[tnum].y_e = (tnum + 1) * image->height / num_threads;
-
-        tinfo[tnum].scene = &scene;
-        tinfo[tnum].image = image;
-        tinfo[tnum].renderer = renderer;
-
-        res = pthread_create(&tinfo[tnum].thread_id, NULL, &thread_render,
-                             &tinfo[tnum]);
-        if (res != 0)
-            errx(42, "pthread_create error, exiting...");
-    }
-    // Wait all the threads joining back to the main
-    void *retval;
-    for (size_t tnum = 0; tnum < num_threads; tnum++)
-    {
-        res = pthread_join(tinfo[tnum].thread_id, &retval);
-        if (res != 0)
-            errx(42, "pthread_join error, exiting...");
-
-        // printf("Joined with thread %zu, return value was %s\n",
-        // tinfo[tnum].thread_num, (char *)retval);
-        free(retval);
-    }
-    free(tinfo);
+    // render all pixels using multithreading
+    multithreading(image, &scene, renderer);
 
     // write the rendered image to a bmp file
     FILE *fp = fopen(argv[2], "w");
