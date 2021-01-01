@@ -1,14 +1,15 @@
 #include <err.h>
 #include <math.h>
+#include <pthread.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <pthread.h>
 
 #include "bmp.h"
 #include "camera.h"
+#include "color.h"
 #include "image.h"
 #include "normal_material.h"
 #include "obj_loader.h"
@@ -17,8 +18,6 @@
 #include "sphere.h"
 #include "triangle.h"
 #include "vec3.h"
-#include "color.h"
-
 
 static void build_test_scene(struct scene *scene, double aspect_ratio)
 {
@@ -218,23 +217,29 @@ static void render_distances(struct rgb_image *image, struct scene *scene,
     rgb_image_set(image, x, y, pix_color);
 }
 
+// Used as argument to thread_start()
 struct thread_info
 {
     size_t thread_num;
     pthread_t thread_id;
 
-    size_t y_s;
-    size_t y_e;
+    size_t y_s; // Starting line of the image
+    size_t y_e; // Ending line of the image
 
     struct scene *scene;
     struct rgb_image *image;
     render_mode_f renderer;
 };
 
+/**
+** The render function of the starting thread,
+** for each thread, it render only the lines specified by arg
+*/
 static void *thread_render(void *arg)
 {
     struct thread_info *tinfo = arg;
-    // printf("Thread %zu takes charge with line %zu to %zu\n", tinfo->thread_num, tinfo->y_s, tinfo->y_e - 1);
+    // printf("Thread %zu takes charge with line %zu to %zu\n",
+    // tinfo->thread_num, tinfo->y_s, tinfo->y_e - 1);
     size_t s = tinfo->y_s;
     size_t e = tinfo->y_e;
 
@@ -289,14 +294,15 @@ int main(int argc, char *argv[])
     //     for (size_t x = 0; x < image->width; x++)
     //         renderer(image, &scene, x, y);
 
-    // multithreading
+    // multithreading depending on the number of available processors
     size_t num_threads = sysconf(_SC_NPROCESSORS_ONLN);
-    // puts("Number of processors available is:");
-    // printf("- %zu\n", num_threads);
     // size_t num_threads = 2;
 
-    struct thread_info *tinfo = xcalloc(num_threads, sizeof(struct thread_info));
+    // Allocate memory for the arguments of thread_start
+    struct thread_info *tinfo
+        = xcalloc(num_threads, sizeof(struct thread_info));
 
+    // Create the corresponding threads
     int res;
     for (size_t tnum = 0; tnum < num_threads; tnum++)
     {
@@ -309,11 +315,12 @@ int main(int argc, char *argv[])
         tinfo[tnum].image = image;
         tinfo[tnum].renderer = renderer;
 
-        res = pthread_create(&tinfo[tnum].thread_id, NULL, &thread_render, &tinfo[tnum]);
+        res = pthread_create(&tinfo[tnum].thread_id, NULL, &thread_render,
+                             &tinfo[tnum]);
         if (res != 0)
             errx(42, "pthread_create error, exiting...");
     }
-
+    // Wait all the threads joining back to the main
     void *retval;
     for (size_t tnum = 0; tnum < num_threads; tnum++)
     {
@@ -321,7 +328,8 @@ int main(int argc, char *argv[])
         if (res != 0)
             errx(42, "pthread_join error, exiting...");
 
-        // printf("Joined with thread %zu, return value was %s\n", tinfo[tnum].thread_num, (char *)retval);
+        // printf("Joined with thread %zu, return value was %s\n",
+        // tinfo[tnum].thread_num, (char *)retval);
         free(retval);
     }
     free(tinfo);
