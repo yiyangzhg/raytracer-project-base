@@ -19,6 +19,8 @@
 #include "triangle.h"
 #include "vec3.h"
 
+#define NUM_SAMPLES 4
+
 static void build_test_scene(struct scene *scene, double aspect_ratio)
 {
     // create a sample red material
@@ -83,7 +85,7 @@ static void build_obj_scene(struct scene *scene, double aspect_ratio)
     vec3_normalize(&scene->light_direction);
 
     // setup the camera
-    double cam_width = 2;
+    double cam_width = 5;
     double cam_height = cam_width / aspect_ratio;
 
     // for some reason the object points in the z axis,
@@ -101,18 +103,58 @@ static void build_obj_scene(struct scene *scene, double aspect_ratio)
     vec3_normalize(&scene->camera.up);
 }
 
-static struct ray image_cast_ray(const struct rgb_image *image,
+static double random_double(double min, double max)
+{
+    // random double in [0, 1)
+    // return rand() / (RAND_MAX + 1.0);
+
+    // random double in [min, max)
+    return min + (max - min) * rand() / (RAND_MAX + 1.0);
+}
+
+/**
+** Cast certain number of sample rays for antialiasing
+*/
+static struct ray *image_cast_ray(const struct rgb_image *image,
                                  const struct scene *scene, size_t x, size_t y)
 {
-    // find the position of the current pixel in the image plane
-    // camera_cast_ray takes camera relative positions, from -0.5 to 0.5 for
-    // both axis
-    double cam_x = ((double)x / image->width) - 0.5;
-    double cam_y = ((double)y / image->height) - 0.5;
+    struct ray *ray = xcalloc(NUM_SAMPLES, sizeof(struct ray));
 
-    // find the starting point and direction of this ray
-    struct ray ray;
-    camera_cast_ray(&ray, &scene->camera, cam_x, cam_y);
+    double cam_x;
+    double cam_y;
+    double u;
+    double v;
+
+    double rank = sqrt(NUM_SAMPLES);
+
+    for (size_t i = 0; i < NUM_SAMPLES; i++)
+    {
+        /*
+        ** +---+---+
+        ** | * | * |
+        ** +---+---+
+        ** | * | * |
+        ** +---+---+
+        ** ex. 4 sample points deployed in the pixel grilled in 4
+        ** same for 16, which is 4 * 4 in the 4 grill
+        */
+        if (i < NUM_SAMPLES / 2)
+            v = y + random_double(0, 0.5);
+        else
+            v = y + random_double(0.5, 1);
+
+        size_t l = i - i % (size_t)rank;
+        if (i >= l && i < l + rank / 2)
+            u = x + random_double(0, 0.5);
+        else
+            u = x + random_double(0.5, 1);
+
+        cam_x = (u / image->width) - 0.5;
+        cam_y = (v / image->height) - 0.5;
+
+        camera_cast_ray(&ray[i], &scene->camera, cam_x, cam_y);
+    }
+
     return ray;
 }
 
@@ -150,19 +192,40 @@ typedef void (*render_mode_f)(struct rgb_image *, struct scene *, size_t x,
 static void render_shaded(struct rgb_image *image, struct scene *scene,
                           size_t x, size_t y)
 {
-    struct ray ray = image_cast_ray(image, scene, x, y);
+    struct ray *ray = image_cast_ray(image, scene, x, y);
 
     struct object_intersection closest_intersection;
-    double closest_intersection_dist
-        = scene_intersect_ray(&closest_intersection, scene, &ray);
+    double closest_intersection_dist;
+    struct material *mat;
+    struct vec3 pix_color = {0};
+    struct vec3 sample_pix_color;
+
+    for (size_t i = 0; i < NUM_SAMPLES; i++)
+    {
+        closest_intersection_dist
+            = scene_intersect_ray(&closest_intersection, scene, &ray[i]);
+
+        // if the intersection distance is infinite, skip this sample
+        if (isinf(closest_intersection_dist))
+            continue;
+        else
+        {
+            mat = closest_intersection.material;
+            sample_pix_color
+                = mat->shade(mat, &closest_intersection.location, scene, &ray[i]);
+
+            pix_color = vec3_add(&pix_color, &sample_pix_color);
+        }
+    }
+    free(ray);
 
     // if the intersection distance is infinite, do not shade the pixel
     if (isinf(closest_intersection_dist))
         return;
 
-    struct material *mat = closest_intersection.material;
-    struct vec3 pix_color
-        = mat->shade(mat, &closest_intersection.location, scene, &ray);
+    double scale = 1.0 / NUM_SAMPLES;
+    pix_color = vec3_mul(&pix_color, scale);
+
     rgb_image_set(image, x, y, rgb_color_from_light(&pix_color));
 }
 
@@ -173,19 +236,39 @@ static void render_shaded(struct rgb_image *image, struct scene *scene,
 static void render_normals(struct rgb_image *image, struct scene *scene,
                            size_t x, size_t y)
 {
-    struct ray ray = image_cast_ray(image, scene, x, y);
-
+    struct ray *ray = image_cast_ray(image, scene, x, y);
     struct object_intersection closest_intersection;
-    double closest_intersection_dist
-        = scene_intersect_ray(&closest_intersection, scene, &ray);
+    double closest_intersection_dist;
+    struct material *mat;
+    struct vec3 pix_color = {0};
+    struct vec3 sample_pix_color;
+
+    for (size_t i = 0; i < NUM_SAMPLES; i++)
+    {
+        closest_intersection_dist
+            = scene_intersect_ray(&closest_intersection, scene, &ray[i]);
+
+        // if the intersection distance is infinite, skip this sample
+        if (isinf(closest_intersection_dist))
+            continue;
+        else
+        {
+            mat = closest_intersection.material;
+            sample_pix_color = normal_material.shade(
+                    mat, &closest_intersection.location, scene, &ray[i]);
+
+            pix_color = vec3_add(&pix_color, &sample_pix_color);
+        }
+    }
+    free(ray);
 
     // if the intersection distance is infinite, do not shade the pixel
     if (isinf(closest_intersection_dist))
         return;
 
-    struct material *mat = closest_intersection.material;
-    struct vec3 pix_color = normal_material.shade(
-        mat, &closest_intersection.location, scene, &ray);
+    double scale = 1.0 / NUM_SAMPLES;
+    pix_color = vec3_mul(&pix_color, scale);
+
     rgb_image_set(image, x, y, rgb_color_from_light(&pix_color));
 }
 
@@ -196,24 +279,43 @@ static void render_normals(struct rgb_image *image, struct scene *scene,
 static void render_distances(struct rgb_image *image, struct scene *scene,
                              size_t x, size_t y)
 {
-    struct ray ray = image_cast_ray(image, scene, x, y);
+    struct ray *ray = image_cast_ray(image, scene, x, y);
 
     struct object_intersection closest_intersection;
-    double closest_intersection_dist
-        = scene_intersect_ray(&closest_intersection, scene, &ray);
+    double closest_intersection_dist;
+
+    double depth_repr;
+    uint8_t depth_intensity;
+
+    for (size_t i = 0; i < NUM_SAMPLES; i++)
+    {
+        closest_intersection_dist
+            = scene_intersect_ray(&closest_intersection, scene, &ray[i]);
+
+       assert(closest_intersection_dist > 0);
+
+        // if the intersection distance is infinite, skip this sample
+        if (isinf(closest_intersection_dist))
+            continue;
+        else
+        {
+            // distance from 0 to +inf
+            // we want something from 0 to 1
+            depth_repr = 1 / (closest_intersection_dist + 1);
+            depth_intensity += depth_repr * 255;
+        }
+    }
+    free(ray);
 
     // if the intersection distance is infinite, do not shade the pixel
     if (isinf(closest_intersection_dist))
         return;
 
-    assert(closest_intersection_dist > 0);
-
-    // distance from 0 to +inf
-    // we want something from 0 to 1
-    double depth_repr = 1 / (closest_intersection_dist + 1);
-    uint8_t depth_intensity = depth_repr * 255;
+    double scale = 1.0 / NUM_SAMPLES;
+    depth_intensity *= scale;
     struct rgb_pixel pix_color
         = {depth_intensity, depth_intensity, depth_intensity};
+
     rgb_image_set(image, x, y, pix_color);
 }
 
@@ -333,10 +435,6 @@ int main(int argc, char *argv[])
             renderer = render_distances;
     }
 
-    // render all pixels in one thread
-    // for (size_t y = 0; y < image->height; y++)
-    //     for (size_t x = 0; x < image->width; x++)
-    //         renderer(image, &scene, x, y);
     // render all pixels using multithreading
     multithreading(image, &scene, renderer);
 
