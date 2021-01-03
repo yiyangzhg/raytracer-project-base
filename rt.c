@@ -19,7 +19,7 @@
 #include "triangle.h"
 #include "vec3.h"
 
-#define NUM_SAMPLES 4
+#define NUM_SAMPLES 8
 
 static void build_test_scene(struct scene *scene, double aspect_ratio)
 {
@@ -33,30 +33,38 @@ static void build_test_scene(struct scene *scene, double aspect_ratio)
     red_material->ambient_intensity = 0.1;
 
     // create a single sphere with the above material, and add it to the scene
-    struct sphere *sample_sphere
+    struct sphere *sample_sphere1
         = sphere_create((struct vec3){0, 10, 0}, 4, &red_material->base);
-    object_vect_push(&scene->objects, &sample_sphere->base);
+    object_vect_push(&scene->objects, &sample_sphere1->base);
 
-    // go the same with a triangle
-    // points are listed counter-clockwise
-    //     a
-    //    /|
-    //   / |
-    //  b--c
-    struct vec3 points[3] = {
-        {6, 10, 1}, // a
-        {5, 10, 0}, // b
-        {6, 10, 0}, // c
-    };
+    struct sphere *sample_sphere2
+        = sphere_create((struct vec3){-7, 10, 0}, 3, &red_material->base);
+    object_vect_push(&scene->objects, &sample_sphere2->base);
 
-    struct triangle *sample_triangle
-        = triangle_create(points, &red_material->base);
-    object_vect_push(&scene->objects, &sample_triangle->base);
+    struct sphere *sample_sphere3
+        = sphere_create((struct vec3){0, 7, 6}, 3, &red_material->base);
+    object_vect_push(&scene->objects, &sample_sphere3->base);
+
+    // // go the same with a triangle
+    // // points are listed counter-clockwise
+    // //     a
+    // //    /|
+    // //   / |
+    // //  b--c
+    // struct vec3 points[3] = {
+    //     {6, 10, 1}, // a
+    //     {5, 10, 0}, // b
+    //     {6, 10, 0}, // c
+    // };
+
+    // struct triangle *sample_triangle
+    //     = triangle_create(points, &red_material->base);
+    // object_vect_push(&scene->objects, &sample_triangle->base);
 
     // setup the scene lighting
     scene->light_intensity = 5;
-    scene->light_color = light_from_rgb_color(255, 255, 0); // yellow
-    scene->light_direction = (struct vec3){-1, 1, -1};
+    scene->light_color = light_from_rgb_color(255, 255, 255); // yellow
+    scene->light_direction = (struct vec3){0, 1, -2};
     vec3_normalize(&scene->light_direction);
 
     // setup the camera
@@ -81,7 +89,7 @@ static void build_obj_scene(struct scene *scene, double aspect_ratio)
     // setup the scene lighting
     scene->light_intensity = 5;
     scene->light_color = light_from_rgb_color(255, 255, 0); // yellow
-    scene->light_direction = (struct vec3){-1, -1, -1};
+    scene->light_direction = (struct vec3){0, -1, -1};
     vec3_normalize(&scene->light_direction);
 
     // setup the camera
@@ -116,7 +124,7 @@ static double random_double(double min, double max)
 ** Cast certain number of sample rays for antialiasing
 */
 static struct ray *image_cast_ray(const struct rgb_image *image,
-                                 const struct scene *scene, size_t x, size_t y)
+                                  const struct scene *scene, size_t x, size_t y)
 {
     struct ray *ray = xcalloc(NUM_SAMPLES, sizeof(struct ray));
 
@@ -182,141 +190,89 @@ scene_intersect_ray(struct object_intersection *closest_intersection,
     return closest_intersection_dist;
 }
 
-typedef void (*render_mode_f)(struct rgb_image *, struct scene *, size_t x,
-                              size_t y);
+typedef struct vec3 (*render_mode_f)(struct scene *, struct ray *ray);
 
 /* For all the pixels of the image, try to find the closest object
 ** intersecting the camera ray. If an object is found, shade the pixel to
 ** find its color.
 */
-static void render_shaded(struct rgb_image *image, struct scene *scene,
-                          size_t x, size_t y)
+static struct vec3 render_shaded(struct scene *scene, struct ray *ray)
 {
-    struct ray *ray = image_cast_ray(image, scene, x, y);
-
     struct object_intersection closest_intersection;
-    double closest_intersection_dist;
-    struct material *mat;
-    struct vec3 pix_color = {0};
-    struct vec3 sample_pix_color;
-
-    for (size_t i = 0; i < NUM_SAMPLES; i++)
-    {
-        closest_intersection_dist
-            = scene_intersect_ray(&closest_intersection, scene, &ray[i]);
-
-        // if the intersection distance is infinite, skip this sample
-        if (isinf(closest_intersection_dist))
-            continue;
-        else
-        {
-            mat = closest_intersection.material;
-            sample_pix_color
-                = mat->shade(mat, &closest_intersection.location, scene, &ray[i]);
-
-            pix_color = vec3_add(&pix_color, &sample_pix_color);
-        }
-    }
-    free(ray);
+    double closest_intersection_dist
+        = scene_intersect_ray(&closest_intersection, scene, ray);
 
     // if the intersection distance is infinite, do not shade the pixel
     if (isinf(closest_intersection_dist))
-        return;
+        return (struct vec3){0, 0, 0};
 
-    double scale = 1.0 / NUM_SAMPLES;
-    pix_color = vec3_mul(&pix_color, scale);
+    struct material *mat = closest_intersection.material;
 
-    rgb_image_set(image, x, y, rgb_color_from_light(&pix_color));
+    return mat->shade(mat, &closest_intersection.location, scene, ray);
 }
 
 /* For all the pixels of the image, try to find the closest object
 ** intersecting the camera ray. If an object is found, shade the pixel to
 ** find its color.
 */
-static void render_normals(struct rgb_image *image, struct scene *scene,
-                           size_t x, size_t y)
+static struct vec3 render_normals(struct scene *scene, struct ray *ray)
 {
-    struct ray *ray = image_cast_ray(image, scene, x, y);
     struct object_intersection closest_intersection;
-    double closest_intersection_dist;
-    struct material *mat;
-    struct vec3 pix_color = {0};
-    struct vec3 sample_pix_color;
-
-    for (size_t i = 0; i < NUM_SAMPLES; i++)
-    {
-        closest_intersection_dist
-            = scene_intersect_ray(&closest_intersection, scene, &ray[i]);
-
-        // if the intersection distance is infinite, skip this sample
-        if (isinf(closest_intersection_dist))
-            continue;
-        else
-        {
-            mat = closest_intersection.material;
-            sample_pix_color = normal_material.shade(
-                    mat, &closest_intersection.location, scene, &ray[i]);
-
-            pix_color = vec3_add(&pix_color, &sample_pix_color);
-        }
-    }
-    free(ray);
+    double closest_intersection_dist
+        = scene_intersect_ray(&closest_intersection, scene, ray);
 
     // if the intersection distance is infinite, do not shade the pixel
     if (isinf(closest_intersection_dist))
-        return;
+        return (struct vec3){0, 0, 0};
 
-    double scale = 1.0 / NUM_SAMPLES;
-    pix_color = vec3_mul(&pix_color, scale);
+    struct material *mat = closest_intersection.material;
+    struct vec3 pix_color = normal_material.shade(
+        mat, &closest_intersection.location, scene, ray);
 
-    rgb_image_set(image, x, y, rgb_color_from_light(&pix_color));
+    return pix_color;
 }
 
 /* For all the pixels of the image, try to find the closest object
 ** intersecting the camera ray. If an object is found, shade the pixel to
 ** find its color.
 */
-static void render_distances(struct rgb_image *image, struct scene *scene,
-                             size_t x, size_t y)
+static struct vec3 render_distances(struct scene *scene, struct ray *ray)
 {
-    struct ray *ray = image_cast_ray(image, scene, x, y);
-
     struct object_intersection closest_intersection;
-    double closest_intersection_dist;
-
-    double depth_repr;
-    uint8_t depth_intensity;
-
-    for (size_t i = 0; i < NUM_SAMPLES; i++)
-    {
-        closest_intersection_dist
-            = scene_intersect_ray(&closest_intersection, scene, &ray[i]);
-
-       assert(closest_intersection_dist > 0);
-
-        // if the intersection distance is infinite, skip this sample
-        if (isinf(closest_intersection_dist))
-            continue;
-        else
-        {
-            // distance from 0 to +inf
-            // we want something from 0 to 1
-            depth_repr = 1 / (closest_intersection_dist + 1);
-            depth_intensity += depth_repr * 255;
-        }
-    }
-    free(ray);
+    double closest_intersection_dist
+        = scene_intersect_ray(&closest_intersection, scene, ray);
 
     // if the intersection distance is infinite, do not shade the pixel
     if (isinf(closest_intersection_dist))
-        return;
+        return (struct vec3){0, 0, 0};
+
+    assert(closest_intersection_dist > 0);
+
+    // distance from 0 to +inf
+    // we want something from 0 to 1
+    double depth_repr = 1 / (closest_intersection_dist + 1);
+    struct vec3 pix_color = {depth_repr, depth_repr, depth_repr};
+
+    return pix_color;
+}
+
+static void aa_render(render_mode_f renderer, struct rgb_image *image,
+                      struct scene *scene, size_t x, size_t y)
+{
+    struct ray *ray = image_cast_ray(image, scene, x, y);
+    struct vec3 pix_color = {0};
+    struct vec3 sample_pix_color;
+    for (size_t i = 0; i < NUM_SAMPLES; i++)
+    {
+        sample_pix_color = renderer(scene, &ray[i]);
+        pix_color = vec3_add(&pix_color, &sample_pix_color);
+    }
+    free(ray);
 
     double scale = 1.0 / NUM_SAMPLES;
-    depth_intensity *= scale;
-    struct rgb_pixel pix_color
-        = {depth_intensity, depth_intensity, depth_intensity};
+    pix_color = vec3_mul(&pix_color, scale);
 
-    rgb_image_set(image, x, y, pix_color);
+    rgb_image_set(image, x, y, rgb_color_from_light(&pix_color));
 }
 
 // Used as argument to thread_start()
@@ -350,7 +306,8 @@ static void *thread_start(void *arg)
 
     for (size_t y = s; y < e; y++)
         for (size_t x = 0; x < image->width; x++)
-            tinfo->renderer(image, scene, x, y);
+            // tinfo->renderer(image, scene, x, y);
+            aa_render(tinfo->renderer, image, scene, x, y);
 
     return NULL;
 }
@@ -421,9 +378,10 @@ int main(int argc, char *argv[])
 
     // build the scene
     build_obj_scene(&scene, aspect_ratio);
-
     if (load_obj(&scene, argv[1]))
         return 41;
+
+    // build_test_scene(&scene, aspect_ratio);
 
     // parse options
     render_mode_f renderer = render_shaded;
