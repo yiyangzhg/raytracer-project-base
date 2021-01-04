@@ -19,7 +19,8 @@
 #include "triangle.h"
 #include "vec3.h"
 
-#define NUM_SAMPLES 8
+#define NUM_SAMPLES 4
+#define MAX_DEPTH 10
 
 static void build_test_scene(struct scene *scene, double aspect_ratio)
 {
@@ -88,19 +89,19 @@ static void build_obj_scene(struct scene *scene, double aspect_ratio)
 {
     // setup the scene lighting
     scene->light_intensity = 5;
-    scene->light_color = light_from_rgb_color(255, 255, 0); // yellow
-    scene->light_direction = (struct vec3){0, -1, -1};
+    scene->light_color = light_from_rgb_color(255, 255, 255); // yellow
+    scene->light_direction = (struct vec3){-1, -1, -1};
     vec3_normalize(&scene->light_direction);
 
     // setup the camera
-    double cam_width = 5;
+    double cam_width = 7;
     double cam_height = cam_width / aspect_ratio;
 
     // for some reason the object points in the z axis,
     // with its up on y
     scene->camera = (struct camera){
-        .center = {0, 1, 2},
-        .forward = {0, -1, -2},
+        .center = {-0.5, 2, 2},
+        .forward = {0.5, -1, -2},
         .up = {0, 1, 0},
         .width = cam_width,
         .height = cam_height,
@@ -190,33 +191,41 @@ scene_intersect_ray(struct object_intersection *closest_intersection,
     return closest_intersection_dist;
 }
 
-typedef struct vec3 (*render_mode_f)(struct scene *, struct ray *ray);
+typedef struct vec3 (*render_mode_f)(struct scene *, struct ray *ray, int depth);
 
-/* For all the pixels of the image, try to find the closest object
-** intersecting the camera ray. If an object is found, shade the pixel to
-** find its color.
-*/
-static struct vec3 render_shaded(struct scene *scene, struct ray *ray)
+static struct vec3 render_shaded(struct scene *scene, struct ray *ray, int depth)
 {
+    if (depth <= 0)
+        return (struct vec3){0, 0, 0};
+
     struct object_intersection closest_intersection;
     double closest_intersection_dist
         = scene_intersect_ray(&closest_intersection, scene, ray);
-
     // if the intersection distance is infinite, do not shade the pixel
     if (isinf(closest_intersection_dist))
         return (struct vec3){0, 0, 0};
 
+    struct ray reflect_ray;
+    reflect_ray.direction = vec3_reflect(&(ray->direction), &(closest_intersection.location.normal));
+    reflect_ray.source = closest_intersection.location.point;
+
     struct material *mat = closest_intersection.material;
 
-    return mat->shade(mat, &closest_intersection.location, scene, ray);
+    struct vec3 reflect_color = render_shaded(scene, &reflect_ray, depth - 1);
+    reflect_color = vec3_mul(&reflect_color, 0.2);
+
+    struct vec3 ori_color = mat->shade(mat, &closest_intersection.location, scene, ray);
+
+    return vec3_add(&reflect_color, &ori_color);
 }
 
 /* For all the pixels of the image, try to find the closest object
 ** intersecting the camera ray. If an object is found, shade the pixel to
 ** find its color.
 */
-static struct vec3 render_normals(struct scene *scene, struct ray *ray)
+static struct vec3 render_normals(struct scene *scene, struct ray *ray, int depth)
 {
+    depth = depth;
     struct object_intersection closest_intersection;
     double closest_intersection_dist
         = scene_intersect_ray(&closest_intersection, scene, ray);
@@ -236,8 +245,9 @@ static struct vec3 render_normals(struct scene *scene, struct ray *ray)
 ** intersecting the camera ray. If an object is found, shade the pixel to
 ** find its color.
 */
-static struct vec3 render_distances(struct scene *scene, struct ray *ray)
+static struct vec3 render_distances(struct scene *scene, struct ray *ray, int depth)
 {
+    depth = depth;
     struct object_intersection closest_intersection;
     double closest_intersection_dist
         = scene_intersect_ray(&closest_intersection, scene, ray);
@@ -264,7 +274,7 @@ static void aa_render(render_mode_f renderer, struct rgb_image *image,
     struct vec3 sample_pix_color;
     for (size_t i = 0; i < NUM_SAMPLES; i++)
     {
-        sample_pix_color = renderer(scene, &ray[i]);
+        sample_pix_color = renderer(scene, &ray[i], MAX_DEPTH);
         pix_color = vec3_add(&pix_color, &sample_pix_color);
     }
     free(ray);

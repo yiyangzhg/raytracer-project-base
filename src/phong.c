@@ -24,7 +24,6 @@ struct vec3 phong_metarial_shade(const struct material *base_material,
         = vec3_mul(&diffuse_light_color, diffuse_intensity * mat->diffuse_Kn);
 
     // compute the specular reflection contribution
-
     struct vec3 light_reflection_dir
         = vec3_reflect(&scene->light_direction, &inter->normal);
     struct vec3 specular_contribution = {0};
